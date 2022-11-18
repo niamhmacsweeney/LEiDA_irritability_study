@@ -1,0 +1,445 @@
+---
+title: "analy_LEiDA_behavioural"
+author: "Niamh MacSweeney"
+date: '2022-08-23'
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+## Introduction 
+
+This script will read in Matlab output from LEiDA analysis and then perform group level analyses to examine how fractional occupancy and dwell time relate to depression and irritability behavioural meausures. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## SET UP 
+
+```{r, libraries}
+
+library(tidyverse)
+library(R.matlab) # read matlab data formats into R
+library(ggplot2)
+library(stringr) #for regular expressions
+library(lmerTest)
+
+library(gtsummary)
+library(ggrepel)
+library(forcats)
+library(webshot2)
+library(rstatix)
+
+
+setwd("/Volumes/hwhalley-adol-imaging/irritability_project/analy") #set working directory
+getwd()
+
+
+```
+
+
+## DEMOGRAPHIC ANALYSIS
+```{r, demo analysis}
+
+#demographic covs
+demo_covs <-rio::import("/Volumes/hwhalley-adol-imaging/irritability_project/data/demo_covs_LEiDA.rds")
+
+#mental health covs
+mh_covs <-rio::import("/Volumes/hwhalley-adol-imaging/irritability_project/data/mh_covs_HALFpipe.rds")
+
+#HALFpipe motion covs (mean framewise displacement)
+
+motion_vars <- rio::import("/Volumes/hwhalley-adol-imaging/irritability_project/data/HALFpipe_motion_values.csv")
+
+```
+
+### REMOVE INVALID IDs before merging dataframes 
+
+Total N should = 29
+
+- Sub 1009: corrupted resting state scan so only half of scan available.
+- Sub 1016: Did not complete any imaging due to technical errors at scanner on day of data collection. Only have questionnaire data for this participant
+
+
+```{r, remove invalid IDs}
+
+#demo vars
+demo_covs <- demo_covs %>% 
+  filter(studyID != 1016) %>% 
+  filter(studyID != 1009)
+
+#mh vars
+mh_covs <- mh_covs %>% 
+  filter(studyID != 1016) %>% 
+  filter(studyID != 1009)
+
+#motion vars: remove 1009 only as no imaging data available for 1036
+motion_vars <- motion_vars %>% 
+  filter(studyID != 1009)
+
+#All dataframes should have 29 observations
+
+```
+
+### Merge dataframes
+
+```{r, merge}
+
+data <- merge(demo_covs, mh_covs, by = "studyID") #merge 1
+data <- merge(data, motion_vars, by = "studyID") #merge 2
+str(data) #check variable type. Grouping variables should be factors 
+
+```
+
+### Tidy up variables 
+
+Note on variable levels:
+
+Sex: 0 = male, 1 = female
+
+irrit_group: 0 = low irritability,  1 = high irritability 
+
+dep_group: 0 = low depression, 1 = high depression
+
+med_group: 0 = medication naive, 1 = history of meds 
+
+
+
+```{r, tidy vars}
+
+#create average motion value for rest and irritable mean FD values
+
+data <- data %>% 
+  mutate(comb_mean_FD = rowMeans(x = select(.data = ., 
+                                            ends_with(match = "mean_FD"))))
+        
+                                      
+```
+
+## Depressive symptoms 
+
+```{r, PHQ 9}
+
+summary(data$PHQ_total)
+summary(data$dep_group) #not depressed = 13, depressed = 16
+
+```
+```{r, save df for descriptives analysis}
+
+main_df <- data
+
+str(main_df)
+
+#rename sex factor variable for table purposes 
+
+levels(main_df$sex) <- list(Male = "0", Female = "1")
+
+
+```
+
+
+
+##Check data structure and change to numeric for use in Matlab
+
+```{r, check structure}
+
+str(data)
+
+#change study ID, sex, irrit_group and dep_group to numeric 
+
+data$studyID <- as.numeric(data$studyID)
+data$sex <- as.numeric(data$sex)
+data$irrit_group <- as.numeric(data$irrit_group)
+data$dep_group <- as.numeric(data$dep_group)
+data$PHQ_total <- as.numeric(data$PHQ_total) #change from integer to numeric to keep consistent
+
+str(data) #all variables are numeric
+
+```
+##Descriptives 
+
+```{r, make table}
+
+des_table <- main_df %>% 
+  select(c(age, sex, PHQ_total, ari_tot, med_group, comb_mean_FD))  %>% 
+  tbl_summary(
+    by = sex,
+    statistic = list(all_continuous() ~ "{mean} ({sd}) ({min} - {max})",
+                     all_categorical() ~ "{n} / {N} ({p}%)"),
+    digits = list(all_continuous() ~ c(2,2,2,2)),
+
+    label = c(ari_tot ~ "Irritability (ARI total score)", 
+              PHQ_total ~  "Depressive symptoms (PHQ-9 total score)",
+              age ~ "Age",
+              med_group ~ "Medication status",
+              comb_mean_FD ~ "Average motion (mean framewise displacement)"),
+    missing_text = "Missing",
+    
+  ) %>% 
+  italicize_levels()
+des_table
+
+#We can copy and paste output into Word nicely but if we want a pdf of the table, use code below. 
+
+#save table as pdf
+
+des_table %>%    # build gtsummary table
+  as_gt() %>%             # convert to gt table
+  gt::gtsave(             # save table as image
+    filename = "descriptives_table.pdf"
+  )
+
+
+
+```
+
+#Group statistics 
+```{r, group stats}
+
+#p-values for t-test
+main_df %>%
+    summarise_each(funs(t.test(.[sex == "Female"], .[sex == "Male"])$p.value), vars = c(age, ari_tot, PHQ_total, comb_mean_FD))
+
+stat.test.phq <- main_df %>% 
+  t_test(ari_tot ~ sex) %>%
+  add_significance()
+stat.test.phq
+
+
+```
+
+#correlation plot between variables 
+
+```{r, make corr plot}
+
+library(corrplot)
+library(RColorBrewer)
+
+#select numeric vars
+
+corr_vars <- main_df %>% 
+  select(c(age, PHQ_total, ari_tot, comb_mean_FD))
+
+corrplot2(corr_vars, type = "upper")
+         col=brewer.pal(n=8, name="RdYlBu"))
+
+cor.test(main_df$age, main_df$comb_mean_FD)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Save behavioual measures as mat file for export into Matlab
+
+```{r, export}
+
+write.csv(data, file = "/Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_behavioural_data.csv")
+
+```
+
+
+######### IGNORE CODE BELOW ###############
+
+This was an alternative approach to the final analysis I ran for this thesis - could look at in future work. 
+
+The scripts below were used for preliminary analyses on the LEiDA behavioural data. Rather than creating a difference score for the clusters that demonstrated a significant difference, we used the compare_scores.m script that will look at correlations between fractional occupancy and dwell time across all the values of K and return pairs with a significant correlation. 
+
+
+- Create demographic table 
+- Load in Matlab output 
+
+
+
+
+
+LOAD Matlab data and tidy 
+
+```{r, read in matlab outputs}
+
+# FO_irrit_DMN <- readMat('/Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_behavioural_analysis/FO_irrit_DMN.mat')
+# 
+# FO_rest_DMN <- readMat('/Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_behavioural_analysis/FO_rest_DMN.mat')
+# 
+# DT_irrit_DMN <- readMat('/Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_behavioural_analysis/DT_irrit_DMN.mat')
+#   
+# DT_rest_DMN <- readMat('/Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_behavioural_analysis/DT_rest_DMN.mat')
+
+```
+
+
+Unlist lists created from Matlab input and append to main dataframe (data)
+
+```{r, merge lists}
+
+# #unlist each LEiDA output variable
+# FO_irrit_DMN <- unlist(FO_irrit_DMN, use.names = TRUE) 
+# FO_rest_DMN <- unlist(FO_rest_DMN, use.names = TRUE) 
+# DT_irrit_DMN <- unlist(DT_irrit_DMN, use.names = TRUE) 
+# DT_rest_DMN <- unlist(DT_rest_DMN, use.names = TRUE) 
+# 
+# #append vectors to dataframe 
+# data$FO_irrit_DMN <- FO_irrit_DMN
+# data$FO_rest_DMN <- FO_rest_DMN
+# data$DT_irrit_DMN <- FO_irrit_DMN
+# data$DT_rest_DMN <- DT_rest_DMN
+
+```
+
+Generate difference score between conditions
+
+```{r, create diff score}
+# 
+# data <- data %>% 
+#   mutate(FO_diff_DMN = FO_rest_DMN - FO_irrit_DMN) #FO difference score 
+# 
+# data <- data %>% 
+#   mutate(DT_diff_DMN = DT_rest_DMN - DT_irrit_DMN) #DT difference score 
+
+```
+
+STEP 5: Check distribution and scale variables
+
+```{r, check distributions and scale numeric variables}
+
+# #Check data type
+# str(data)
+# #change PHQ_9 from integer to numeric
+# data$PHQ_total <- as.numeric(data$PHQ_tota)
+# 
+# #change other variables to factors or character
+# data$studyID <- as.factor(data$studyID)
+# data$med_group <- as.factor(data$med_group)
+# 
+# #Check distribution of outcome variables (FO and DT values)
+# hist(data$FO_diff_DMN)
+# hist(data$age)
+# hist(data$PHQ_total)
+# hist(data$ari_tot)
+# 
+# #Numeric variables on different scales so rescale (i.e., standardise so they have a mean of zero) before analyses. 
+# data_scaled <- data %>% 
+#   mutate(across(where(is.numeric), scale))
+# head(data)
+```
+
+Check if residuals are normally distributed before proceeding with analysis. 
+
+Based on the basic analyses below, it doesn't look as if the meet the assumptions for linear regression (outlined nicely here: http://www.sthda.com/english/articles/39-regression-model-diagnostics/161-linear-regression-assumptions-and-diagnostics-in-r-essentials/)
+
+Therefore, using a generalised linear model approach may be more appropriate
+
+```{r, inspect models}
+
+# #FO_models
+# 
+# #PHQ-9 Depression
+# FO_dep_model <- lm(PHQ_total ~ FO_diff_DMN + age + sex + comb_mean_FD, data = data_scaled)
+# summary(FO_dep_model)
+# plot(FO_dep_model)
+# 
+# FO_irrit_model <- lm(ari_tot ~ FO_diff_DMN + age + sex + comb_mean_FD, data = data_scaled)
+# summary(FO_irrit_model)
+# plot(FO_irrit_model)
+# 
+# #DT_models
+# 
+# DT_dep_model <- lm(DT_diff_DMN ~ PHQ_total + age + sex + comb_mean_FD, data = data)
+# summary(DT_dep_model)
+# plot(DT_dep_model)
+# 
+# DT_irrit_model <- lm(DT_diff_DMN ~ ari_tot + age + sex + comb_mean_FD, data = data)
+# summary(DT_irrit_model)
+# plot(DT_irrit_model)
+
+```
+
+Generalised Linear Models
+
+Run GLM with binary outcome measure. 
+
+Look at this tutorial: https://psych252.github.io/psych252book/generalized-linear-model.html
+
+```{r, glm depression}
+# #binary 
+# dep_mod <- glm(dep_group ~ FO_diff_DMN + ari_tot + age + sex + comb_mean_FD , family = "binomial", data = data_scaled)
+# summary(dep_mod) #get model summary 
+# 
+# #continuous
+# test <- glm(PHQ_total ~ FO_diff_DMN + age + sex + comb_mean_FD , data = data_scaled)
+# summary(test) 
+# 
+# #extract values of interest
+# 
+# dep_vals <- summary(dep_mod)$coefficients %>% 
+#   as.data.frame %>% 
+#    dplyr::select(beta=Estimate,std=`Std. Error`, z.value =`z value`, p.value=`Pr(>|z|)`) 
+# 
+# exp(coef(dep_mod))
+# 
+# #inspect model to check for overfitting 
+# 
+# summary(residuals(dep_mod)) #check residuals
+# coef(dep_mod) #get beta coeff
+# confint(dep_mod) #get conf. interval 
+# 
+# #Since the median deviance residual is close to zero, this means that our model is not biased in one direction (i.e. the out come is neither over- nor underestimated).
+# 
+# 1-pchisq(39.982, 28) #0.066 #null deviance
+# 1-pchisq(31.047, 24) #0.152 #residual deviance (better model with the covariates)
+# #check what the difference in chi-squared values are
+# 1-pchisq(39.982 - 31.047, 28-24) #0.0627 #not significantly different - looks like model with covs is better but not significantly so. 
+# 
+# 
+# 
+# 
+# ```
+# ```{r, irritability}
+# 
+# #continous measure
+# irrit_mod <- glm(ari_tot ~ FO_diff_DMN + age + sex + comb_mean_FD, data = data_scaled)
+# summary(irrit_mod) #get model summary 
+# 
+# 
+# 
+# #extract values of interest
+# 
+# vals <- summary(irrit_mod)$coefficients %>% 
+#   as.data.frame %>% 
+#    dplyr::select(beta=Estimate,std=`Std. Error`, z.value =`z value`, p.value=`Pr(>|z|)`) 
+# 
+# exp(coef(irrit_mod))
+# 
+# #inspect model to check for overfitting 
+# 
+# summary(residuals(irrit_mod)) #check residuals
+# coef(irrit_mod) #get beta coeff
+# confint(irrit_mod) #get conf. interval 
+# 
+# #Since the median deviance residual is close to zero, this means that our model is not biased in one direction (i.e. the out come is neither over- nor underestimated).
+# 
+# 1-pchisq(39.982, 28) #0.066 #null deviance
+# 1-pchisq(31.047, 24) #0.152 #residual deviance (better model with the covariates)
+# #check what the difference in chi-squared values are
+# 1-pchisq(39.982 - 31.047, 28-24) #0.0627 #not significantly different - looks like model with covs is better but not significantly so. 
+# 
+# ```
+
+

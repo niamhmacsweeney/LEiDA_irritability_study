@@ -1,0 +1,455 @@
+---
+title: "prep_quest"
+author: "Niamh MacSweeney"
+date: "25/01/2022"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+#### Introduction
+
+The purpose of this script is to quality control and process the
+questionnaire data from the Irritability project:
+
+#### SetUp
+
+The raw (untabulated) questionnaire data is located in:
+/Volumes/hwhalley-adol-imaging/Questionnaire_data/2021_07_05_download.xlsx
+
+See /README_ISSF_questionnaire_data.rtf for details on questionnaires
+included (this will also aid searching the unified questionnaire data to
+extract measures of interest)
+
+Save tabulated (extracted from unified) in:
+/Volumes/hwhalley-adol-imaging/Questionnaire_data/Tabulated_data.
+
+This is a good tutorial on regex (handy for tidying
+variables):<https://www.jumpingrivers.com/blog/regular-expressions-every-r-programmer-should-know/>
+
+\*\*\*Note: Liana has already extracted the following measures and these
+are available in tabulated form: 1. Brief Resilience Scale (BRS) 2. GCOS
+(General Causality Orientations Scale ) 3. PCASS (Perceived Choice and
+Awareness of Self Scale) 4. PHQ-9 (Depression measure) 4. RCADS (Revised
+Children's Anxiety and Depression Scale)
+
+```{r, setup }
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(stringr) #for regular expressions
+library(gridExtra)
+library(RColorBrewer)
+library(ggpubr) #for scatter plots corr. coeff
+
+
+setwd("/Volumes/hwhalley-adol-imaging/irritability_project/prep") #set working directory
+getwd()
+
+```
+
+Load in raw questionnaire data.
+
+The behaviour, mood and cognition questionnaire data is located in
+post_scan_3.
+
+Note: the data is located in a different wd to this .Rmd file so we will
+"hardcode" the data into the script.
+
+```{r, load unified untabulated dataframe}
+
+df <-rio::import("/Volumes/hwhalley-adol-imaging/Questionnaire_data/2021_07_05_download/results-for-post-scan-3-2021-07-05-1537.csv")
+
+PHQ_9 <- rio::import("/Volumes/hwhalley-adol-imaging/Questionnaire_data/Tabulated_data/PHQ9.csv")
+
+RCADS <- rio::import("/Volumes/hwhalley-adol-imaging/Questionnaire_data/Tabulated_data/RCADS.csv")
+
+```
+
+\#\#\#\#Inspect and tidy up variables
+
+Please consult ISSF_data_dictionary to get the column numbers and names
+of your variables of interest. Note: Due to the set up on Online Survey,
+the introductory question for each measure was given its own column. For
+ease of scripting, this column will be removed before giving short names
+to each element name. See ARI code chunk below as an example.
+
+e.g.,
+
+To make key column names more intuitive (e.g., subject id) we will
+rename the columns.
+
+```{r, inspect variables and tidy}
+
+class(df) #check class, should = data.frame
+str(df) #check data structure
+
+#rename subject id column
+#it would be easier to do this using column number but to aid reproducibility, we have used the full column names. 
+
+df <- df %>% 
+  rename(studyID = "1. Please enter your unique four-digit study code that you will have been given by the research team:")
+
+```
+
+\#\#\#\#\#Affective Reactivity Index
+
+See this Stringaris et al., 2012 paper for
+reference:<https://www.kcl.ac.uk/ioppn/depts/cap/research/moodlab/stringaris-ari-paper.pdf>
+
+#### ARI STEP ONE: Scoring and export to tabulated folder
+
+```{r, extract ARI columns and make new df}
+df <- df %>% 
+  select(- "53. In the last six months and compared to others of the same age, how well does each of the following statements describe your behavior/feelings?") %>% #Remove question column
+  rename(ari_1 = "53.1. 1. I am easily annoyed by others", #rename columns
+         ari_2 = "53.2. 2. I often lose my temper",
+         ari_3 = "53.3. 3. I stay angry for a long time",
+         ari_4 = "53.4. 4. I am angry most of the time",
+         ari_5 = "53.5. 5. I get angry frequently",
+         ari_6 =  "53.6. 6. I lose my temper easily",
+         ari_7 = "53.7. 7. Overall, my irritability causes me problems.")
+
+ARI <- df %>% 
+  select("studyID","ari_1":"ari_7") #make ARI dataframe
+
+str(ARI) #check data class (=character) so we need to change to numeric
+
+#write function that specifies how we would like to recode character variables to numeric. 
+temp_fn <- function(x){
+  case_when(x == 'Not true'  ~ 0,
+            x == 'Somewhat true' ~ 1,
+            x == 'Certainly true'  ~ 2)
+}
+ ARI <- ARI %>%
+  mutate_at(.vars  = vars(c("ari_1", "ari_2", "ari_3", "ari_4", "ari_5", "ari_6", "ari_7")), 
+            .funs = temp_fn)
+
+ #tidier code would be better here but get NAs when using c("ari_1": "ari_7") so leaving as is for now. 
+ 
+ #### SCORE ARI ####
+ 
+ #ARI total score = sum of first 6 items (i.e., ari_1 to ari_6)
+ #ari_7 is a measure of impairment and is analysed separately. 
+ 
+ ARI$ari_tot <-rowSums(ARI[,c("ari_1", "ari_2", "ari_3", "ari_4", "ari_5", "ari_6")], na.rm=T)
+ 
+ ARI <- ARI %>%  relocate(ari_tot ,.after = studyID) #rearrange cols so ari_tot is after ID
+ 
+ #output tabulated ARI data
+ write.csv(ARI, "/Volumes/hwhalley-adol-imaging/Questionnaire_data/Tabulated_data/ARI.csv")
+```
+
+#### ARI STEP TWO: Inspect ARI distribution
+
+Range of possible scores = 0 - 12
+
+```{r, extract ARI columns and make new df}
+#inspect ARI scores #seem to be low irritability scores over all. 
+ 
+summary(ARI$ari_tot) # get sum stats: mean = 3.226, range = 0-10
+sd(ARI$ari_tot) #SD = 2.642
+
+#Let's plot the ARI data
+#Looks like most people are on the lower end of irritability
+
+ARI_hist <- ARI %>% 
+  ggplot(aes(x = ari_tot)) +
+  geom_histogram(bins = 10,
+                colour = "skyblue4",
+                 fill = "skyblue3") +
+  labs(title = "Affective Reactivity Index (ARI)", x = "ARI Total") +
+                scale_x_continuous(breaks=seq(0, 12, 2), limits = c(0,12))
+print(ARI_hist)
+
+ggsave("/Volumes/hwhalley-adol-imaging/irritability_project/figs/ARI_hist.png")
+
+```
+
+##### ARI Average Total Score
+
+From Stringaris et al., 2012:
+<https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&cad=rja&uact=8&ved=2ahUKEwjO9I_Eyqf2AhVJTcAKHZZHBkMQFnoECBwQAQ&url=https%3A%2F%2Fwww.psychiatry.org%2FFile%2520Library%2FPsychiatrists%2FPractice%2FDSM%2FAPA_DSM5_Level-2-Irritability-Child-Age-11-to-17.pdf&usg=AOvVaw0KAwkEkwgxzKY7cDgnrb0A>
+
+Higher scores indicate greater severity of irritability. In addition,
+the clinician is asked to calculate and use the average total score. The
+average total score reduces the overall score to a 3-point scale, which
+allows the clinician to think of the child's irritability in terms of
+none (0), mild-moderate (1), or moderate-severe (2). The use of the
+average total score was found to be reliable, easy to use, and
+clinically useful to the clinicians in the DSM-5 Field Trials.2
+
+The average total score is calculated by dividing the raw total score by
+6 (i.e., the first 6 items on the measure).
+
+First, generate average total score:
+
+None = 0 mild-moderate = 1 Moderate severe = 2
+
+Then, use average total score categories to generate binary variable:
+Average total score = 0 = not irritated, Group = 0 Average total score
+\<= 1 = irritated, mild-moderate or moderate severe irritability. Group
+= 1
+
+\*\*\*Note: We may revisit this coding and change it to an ordinal
+measure (e.g., range 0-2) rather than binary (e.g., 0-1) but for the
+time being, we will use a binary measure to keep it consistent with the
+depressio measure.
+
+```{r, ARI average total score}
+
+ARI <- ARI %>% 
+  mutate(ari_avg_tot = ari_tot/6) #generate average total score
+
+#round to 0 decimal places to get whole number value
+ARI$ari_avg_tot <- round(ARI$ari_avg_tot, digits = 0)
+
+#make grouping variable: 0 = not irritated, 1 = irritated
+ARI <- ARI %>%
+  mutate(irrit_group = case_when(ari_avg_tot == 0 ~ 0,
+                              ari_avg_tot >= 1 ~ 1
+                              ))
+
+#make variable factor as it is a grouping variable
+ARI$irrit_group = as.factor(ARI$irrit_group)
+#check it worked
+str(ARI$irrit_group)
+print(ARI$irrit_group)
+
+irrt_df <- data.frame(ARI$irrit_group) #convert to dataframe to get group count
+count(irrt_df, ARI.irrit_group) #use count function to get group breakdown 
+  
+#Breakdown: Not Irritated = 20; Irritated = 11
+
+high_irrit <- ARI %>% 
+  select(studyID, irrit_group) %>% 
+  filter(irrit_group == 1)
+
+low_irrit <- ARI %>% 
+  select(studyID, irrit_group) %>% 
+  filter(irrit_group == 0)
+         
+
+```
+
+##### PHQ-9: Measure of Depression
+
+See this
+
+PHQ-9 Score Depression Severity 0 -- 4 None-minimal 5 -- 9 Mild\
+10 -- 14 Moderate 15 -- 19 Moderately Severe\
+20 -- 27 Severe
+
+```{r, PHQ-9 total, continuous measure}
+summary(PHQ_9$PHQ_total) # get sum stats: mean = 11.87, range = 3-25
+sd(PHQ_9$PHQ_total) #SD = 6.607
+
+#Let's create categories based on PHQ-9 scoring
+
+#write a function to classify the categories
+cat_fn <- function(x){
+  case_when(
+    between(x, 0, 4) ~ 'None-minimal',
+    between(x, 5, 9) ~ 'Mild',
+    between(x, 10, 14) ~ 'Moderate',
+    between(x, 15, 19) ~ 'Moderate-severe',
+    between(x, 20, 27) ~ 'Severe')
+
+}
+
+#define object x. Here, we want the function to be applied to PHQ_total
+x <- PHQ_9$PHQ_total
+
+#apply function
+PHQ_9 <- PHQ_9 %>% 
+mutate(PHQ_severity = cat_fn(x))
+
+#count number of participants in each category. 
+PHQ_table <- PHQ_9 %>% 
+    group_by(PHQ_severity) %>% 
+    tally()
+print(PHQ_table)
+
+png("/Volumes/hwhalley-adol-imaging/irritability_project/figs/PHQ_table.png",
+    height = 100*nrow(PHQ_table), width =200*ncol(PHQ_table))
+grid.table(PHQ_table)
+dev.off()
+
+#Let's plot the PHQ_total (histogram)
+
+PHQ_tot_hist <- PHQ_9 %>% 
+  ggplot(aes(x = PHQ_total)) +
+  geom_histogram(bins = 15,
+                colour = "skyblue4",
+                 fill = "skyblue3") +
+  labs(title = "PHQ-9", x = "PHQ Total") +
+  scale_x_continuous(breaks=seq(0, 27, 3), limits = c(0,27))
+
+print(PHQ_tot_hist)
+```
+
+\#\#\#\#PHQ-9 Binary measure Let's generate a group variable that
+classifies participant as either "depressed" or "not depressed". PHQ-9
+total score \>= 10 = depressed, indicating moderate to severe
+depression; Group = 1 PHQ-9 total score \<= 10 = not depression,
+indicating none to mild symptoms of depression. Group = 0
+
+```{r, PHQ-9 binary}
+
+#make grouping variable: 0 = not depressed, 1 = depressed 
+PHQ_9 <- PHQ_9 %>%
+  mutate(dep_group = case_when(PHQ_total < 10 ~ 0,
+                              PHQ_total >= 10 ~ 1
+                              ))
+
+#Change grouping variable type from numeric to factor
+PHQ_9$dep_group = as.factor(PHQ_9$dep_group)
+#check it worked
+str(PHQ_9$dep_group)
+print(PHQ_9$dep_group)
+
+
+dep_df <- data.frame(PHQ_9$dep_group) #convert to dataframe to get group count
+count(dep_df, PHQ_9.dep_group) 
+
+#Group breakdown
+#Not depressed = 14; depressed = 17
+
+
+#Let's plot the PHQ_severity categories (barplot)
+# 
+# PHQ_sev_bar <- PHQ_9 %>% 
+#   ggplot(aes(x = PHQ_severity) +
+#     geom_bar())
+
+```
+
+Correlation between PHQ-9 and ARI
+
+```{r, PHQ-9}
+
+#Merge dfs
+working_df <- merge(ARI, PHQ_9, by = "studyID")
+
+corr <- cor.test(working_df$PHQ_total,working_df$ari_tot, method = "pearson")
+#r = 0.519
+
+#Plot ARI and PHQ relationship 
+#define plot
+ari_phq_plot <- ggplot(data = working_df,
+                       mapping = aes(x = ari_tot, y = PHQ_total))
+#draw plot
+ari_phq_plot <- ari_phq_plot +
+   geom_point(alpha = 0.7, size=2, aes(color = PHQ_severity),
+              fill = "transparent") +
+  labs(title = "Depression + Irritability Relationship",
+       y= "PHQ-9 Total Score",
+       x = "Affective Reactivity Index Total Score",
+       colour = "PHQ-9 Severity") +
+  geom_smooth(method = "lm") +
+  stat_cor(method = "pearson", label.x = 1.5, label.y =  25) +
+   scale_color_brewer(palette = "Paired") 
+
+print(ari_phq_plot)
+ggsave("/Volumes/hwhalley-adol-imaging/irritability_project/figs/ari_phq_plot.png")
+
+
+```
+
+###RCADS: Mmeasure of depression 
+
+Extract RCADS Major Depression Score
+
+```{r, RCADS-depression}
+
+RCADS_dep <- RCADS %>% 
+  select("studyID", "Major depression")
+
+#check variable type
+str(RCADS_dep$`Major depression`) #integer 
+
+
+```
+Correlation between RCADS and PHQ-9 as a sensitivity analysis 
+
+```{r RCADS PHQ-9 correlation}
+
+#add RCADS_dep to working directory using merge. 
+
+working_df <- merge(working_df, RCADS_dep, by = "studyID")
+
+working_df <- working_df %>% 
+  rename(RCADS_depression = `Major depression`) #rename RCADS depression measure for clarity 
+
+#let's look at the correlation
+corr1 <- cor.test(working_df$PHQ_total,working_df$RCADS_depression, method = "pearson")
+#r = 0.856 
+
+#Plot PHQ and RCADS_depression relationship 
+#define plot
+phq_RCADS_plot <- ggplot(data = working_df,
+                       mapping = aes(x = RCADS_depression, y = PHQ_total))
+#draw plot
+phq_RCADS_plot <- phq_RCADS_plot +
+   geom_point(alpha = 0.7, size=2, aes(color = PHQ_severity),
+              fill = "transparent") +
+  labs(title = "PHQ-9 and RCADS Depression Relationship",
+       y= "PHQ-9 Total Score",
+       x = "RCADS Depression Score",
+       colour = "PHQ-9 Severity") +
+  geom_smooth(method = "lm") +
+  stat_cor(method = "pearson", label.x = 1.5, label.y =  25) +
+   scale_color_brewer(palette = "Paired") 
+
+print(phq_RCADS_plot)
+
+```
+
+
+#RCADS Binary Measure 
+
+```{r, RCADS}
+
+#make grouping variable: 0 = not depressed, 1 = depressed 
+RCADS <- PHQ_9 %>%
+  mutate(dep_group = case_when(PHQ_total < 10 ~ 0,
+                              PHQ_total >= 10 ~ 1
+                              ))
+
+#Change grouping variable type from numeric to factor
+PHQ_9$dep_group = as.factor(PHQ_9$dep_group)
+#check it worked
+str(PHQ_9$dep_group)
+print(PHQ_9$dep_group)
+
+
+dep_df <- data.frame(PHQ_9$dep_group) #convert to dataframe to get group count
+count(dep_df, PHQ_9.dep_group) 
+
+
+
+```
+
+
+Extract mental health variables for use in HALFpipe group level analysis
+
+```{r, HALFpipe extract covs}
+
+leida_data <- working_df %>% 
+  select(studyID, ari_tot, PHQ_total, irrit_group, dep_group)
+
+leida_data <- leida_data %>% 
+  filter(studyID != 1016)
+
+setwd("/Volumes/hwhalley-adol-imaging/irritability_project/data")
+write.csv(leida_data,"/Volumes/hwhalley-adol-imaging/irritability_project/data/leida_data.csv", row.names =  FALSE)
+
+
+
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```

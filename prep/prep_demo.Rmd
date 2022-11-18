@@ -1,0 +1,336 @@
+---
+title: "prep_demo"
+author: "Niamh MacSweeney"
+date: "31/01/2022"
+output: html_document
+---
+#### Introduction
+The purpose of this script is to quality control and process the demographic data from the Irritability project:
+
+#### SetUp
+
+The raw (untabulated) questionnaire data is located in: /Volumes/hwhalley-adol-imaging/Questionnaire_data/2021_07_05_download.xlsx
+
+See /README_ISSF_questionnaire_data.rtf for details on questionnaires included (this will also aid searching the unified questionnaire data to extract measures of interest)
+
+Save tabulated (extracted from unified) in: /Volumes/hwhalley-adol-imaging/Questionnaire_data/Tabulated_data.
+
+This is a good tutorial on regex (handy for tidying variables):https://www.jumpingrivers.com/blog/regular-expressions-every-r-programmer-should-know/
+
+The demographic data is found in the post-scan-4 batter and contains: age, race, height, weight, family history, medication status, mental health treatment information, puberty questionnaire, smoking and alcohol use, data for SMID
+
+
+```{r, setup}
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(stringr) #for regular expressions
+library(lubridate)
+library(measurements) #for wrangling meausurement data
+
+
+setwd("/Volumes/hwhalley-adol-imaging/irritability_project/prep") #set working directory
+getwd()
+
+```
+Load in raw demographic data -  located in post_scan_3.
+
+
+Note: the data is located in a different wd to this .Rmd file so we will "hardcode" the data into the script. 
+```{r, load in data}
+
+demo_vars <-rio::import("/Volumes/hwhalley-adol-imaging/Questionnaire_data/2021_07_05_download/results-for-post-scan-4-2021-07-05-1537.csv")
+
+```
+
+####Inspect and tidy up variables
+
+We will rename all the variable so that they are easier to read. Please consult ISSF data dictionary (demographics) for details on variables, including exact phrasing of questions. 
+
+```{r, tidy variables}
+
+#rename all variables
+
+demo_vars <- demo_vars %>% 
+  rename(studyID = "1. Please enter your unique four-digit study code that you will have been given by the research team:", 
+         date_of_birth = "2. Your date of birth", 
+         gender = "3. Which gender do you identify with?",
+         sex = "4. What is your biological sex?",
+         race = "5. How would you describe your ethnic origin?",
+         height = "6. What is your current height? Please include the unit of measurement (e.g., centimetres or feet/inches). If you are unsure, please give your best estimate.",
+         weight = "7. What is your current weight? Please include the unit of measurement (e.g., kilograms or stones/pounds). If you are unsure, please give your best estimate.",
+         postcode = "8. What is your home postcode?",
+         family_hist = "9. Does a close family member (parent/sibling/grandparent) have a history of a mental health problem?",
+         family_hist_info = "9.a. Please give details of the issue or diagnosis",
+         chronic_condition = "10. Do you suffer from a chronic health condition (e.g. chronic respiratory or inflammatory conditions?",
+         chronic_condition_info = "10.a. Please give details of the issue or diagnosis",
+         med_status = "11. Are you currently taking any medications?",
+         med_status_info = "11.a. Please give details on the type of medication, dates and duration of treatment.",
+         psych_med_status = "12. Have you taken medication for behavioural or emotional difficulties in the past?",
+         psych_med_info = "12.a. Please give details on the type of medication, dates and duration of treatment.",
+         psych_ther_status = "13. Are you currently receiving, or have you received psychotherapy counselling or seen a guidance counsellor at school for emotional difficulties?",
+         psych_ther_info = "13.a. Please give details on the type, dates and duration of treatment.",
+         school_func = "14. Have you needed to take time off school because of low mood?",
+         school_func_info = "14.a. For how long?",
+         smoking_status = "15. Do you smoke or have you smoked in the past?",
+         ecig_status = "16. Do you use e-cigarettes/vapes/vape-pens or have you used them in the past?",
+         alcohol_status = "17. Have you ever had an alcoholic drink?",
+         alcohol_units = "17.a. During the past week, please record how many units of alcohol you have had. (1 Unit = approximately 1⁄2 a pint of beer, 1 measure of spirit, or 1 glass of wine)",
+         alcohol_units_comp = "17.a.i. How does this compare to what you usually drink in a week?",
+         puberty_1f = "18. FEMALES: How old were you when you had your period for the first time?",
+         puberty_2f = "19. FEMALES: How old were you when you first started to wear a bra?",
+         puberty_1m = "20. MALES: How old were you when your voice started to break?",
+         
+         puberty_2m = "21. MALES: How old were you when you first started to shave your facial hair?",
+         
+         gp_name = "22. GP Name:",
+         
+         gp_address = "23. GP Address:",
+         
+         completion_date = "CompletionDate"
+         
+         ) 
+
+colnames(demo_vars) #check it worked. 
+
+
+class(demo_vars) #check class, should = data.frame
+str(demo_vars) #check data structure
+
+```
+
+
+```{r, remove }
+
+```
+
+
+#Generate age variable from date of birth and completion date
+```{r, calculate age}
+
+#DOB and completion date are both character variables
+demo_vars %>% 
+  select(date_of_birth, completion_date) %>% 
+  str()
+
+#First, convert these columns to date format using lubridate function
+#They will both be converted to year, month, day and saved as an "interval" class, as per lubridate function. 
+
+
+demo_vars<- demo_vars %>% 
+  mutate(date_of_birth = dmy(date_of_birth),
+            completion_date = dmy(completion_date))
+
+demo_vars %>% 
+  select(date_of_birth, completion_date) %>% 
+  str() #check it worked - it did - both now in Date format!
+
+#calcuate age in years using interval function
+
+#create objects to use with function
+dob <- demo_vars$date_of_birth
+test_date <- demo_vars$completion_date
+
+#run function
+demo_vars$age <- interval(dob, test_date) %>%
+  as.numeric('years') #this will give the year as a decimal place
+  round(demo_vars$age, digits = 2) #let's round to two decimal places. 
+
+```
+#Generate standard weight and height variables 
+
+Height will be in units: cm or ft an/or inches - need to convert all to meters
+Weight will be in units: kg or stone and/or pounds - need to convert all to kg. 
+
+BMI calculation requires height and weight in meters and kg. 
+####Height 
+```{r, tidy height}
+
+print(demo_vars$height)
+
+#use stringr function to remove units
+
+height <- demo_vars$height
+
+#deal with cm units first
+demo_vars$height <- str_replace(height, pattern = "cm", replacement = "") #remove cm units (imp. for later conversion to numeric from character vector)
+
+#prepare feet and inches for conversion
+
+#split height column into two new cols called "ft" and "inches" by pattern "ft"
+#Note: Where height is given in cm, it will be NA (only worked for extract function, not separate)
+demo_vars <- demo_vars %>% 
+  extract(col = height, into = c("ft", "inches"), regex = "([[:alnum:]]+)ft([[:alnum:]]+)", 
+convert = TRUE, remove = FALSE) %>% 
+  mutate(cm = (12*ft + inches)*2.54)
+
+
+#make ft/inches row in height column = NA to allow later merge. 
+demo_vars <- demo_vars %>% 
+  mutate(height = case_when(
+    str_detect(height, "ft")~ "NA",
+    TRUE ~ .$height
+    ))
+
+#change height column to numeric 
+#Note: you will get warming that NAs introduced by coercion —— this is okay because we converted ft/inches to NAs already in previous step. 
+demo_vars$height <- as.numeric(as.character(demo_vars$height))
+
+#check variable classes to ensure numeric before merge
+demo_vars %>% 
+  select(height, cm) %>% 
+str() #both numeric! 
+
+#merge two columns using coalesce function to get final height column 
+    demo_vars <- demo_vars %>% mutate(height_tidy = coalesce(height, cm))
+
+#now merge new "cm" column with original height column
+demo_vars <- demo_vars %>% 
+      mutate(height_tidy = coalesce(height,cm)) #merge
+      
+demo_vars <- demo_vars %>% 
+  mutate(height_m = height_tidy/100) #convert to metres
+
+demo_vars$height_m <- round(demo_vars$height_m, digits = 2) #round to two decimal places
+  
+ colnames(demo_vars)   #print column names
+#remove columns that are no longer needed
+    demo_vars <- demo_vars %>% 
+      select(-c(height_tidy,height, ft, inches, cm))
+
+colnames(demo_vars) #check it worked
+```
+ #####Weight 
+```{r, weight}
+print(demo_vars$height)
+
+#use stringr function to remove units
+
+height <- demo_vars$height
+
+#deal with cm units first
+demo_vars$height <- str_replace(height, pattern = "cm", replacement = "") #remove cm units (imp. for later conversion to numeric from character vector)
+
+#prepare feet and inches for conversion
+
+#split height column into two new cols called "ft" and "inches" by pattern "ft"
+#Note: Where height is given in cm, it will be NA (only worked for extract function, not separate)
+demo_vars <- demo_vars %>% 
+  extract(col = height, into = c("ft", "inches"), regex = "([[:alnum:]]+)ft([[:alnum:]]+)", 
+convert = TRUE, remove = FALSE) %>% 
+  mutate(cm = (12*ft + inches)*2.54)
+
+
+#make ft/inches row in height column = NA to allow later merge. 
+demo_vars <- demo_vars %>% 
+  mutate(height = case_when(
+    str_detect(height, "ft")~ "NA",
+    TRUE ~ .$height
+    ))
+
+#change height column to numeric 
+#Note: you will get warming that NAs introduced by coercion —— this is okay because we converted ft/inches to NAs already in previous step. 
+demo_vars$height <- as.numeric(as.character(demo_vars$height))
+
+#check variable classes to ensure numeric before merge
+demo_vars %>% 
+  select(height, cm) %>% 
+str() #both numeric! 
+
+#merge two columns using coalesce function to get final height column 
+    demo_vars <- demo_vars %>% mutate(height_tidy = coalesce(height, cm))
+
+#now merge new "cm" column with original height column
+demo_vars <- demo_vars %>% 
+      mutate(height_tidy = coalesce(height,cm)) 
+
+ colnames(demo_vars)   #print column names
+#remove colulmns that are no longer needed
+    demo_vars <- demo_vars %>% 
+      select(-c(height, ft, inches, cm))
+
+colnames(demo_vars) #check it worked
+
+
+```
+ 
+Inspect age variables
+```{r, age}
+
+
+summary(demo_vars$age) # get sum stats: mean = 18.86, range = 17-20
+sd(demo_vars$age) #SD=0.83
+demo_vars$age <- round(demo_vars$age, digits = 2) #round to two decimal places
+
+```
+
+Inspect and tidy sex variable for group analysis 
+
+```{r, sex}
+
+str(demo_vars$sex)
+
+#Recode sex variable as 0 and 1 so that it works in HALFpipe. 0 = Male, 1 = Female
+demo_vars <- demo_vars%>%
+  mutate(sex = case_when(sex == "Male" ~ 0,
+                              sex == "Female" ~ 1
+                              ))
+
+demo_vars$sex = as.factor(demo_vars$sex)
+#check it worked
+str(demo_vars$sex)
+print(demo_vars$sex)
+
+
+#Get percentage breakdown of sex: Male = 22.6%; Female= 77.4%
+
+demo_vars %>% 
+    group_by(sex) %>% 
+    summarise(percent = 100 * n() / nrow(demo_vars))
+
+```
+
+### Inspect medication variables
+
+Need to create new binary variable for psychotropic medication history 
+
+0 = medication naive
+1 = history of meds or currently taking meds 
+
+```{r, medication vars}
+
+#extract vars of interest from master files 
+
+#double check med_status and med_status_info variables to check for any mismatches. 
+
+demo_vars <- demo_vars %>% 
+mutate(med_group = case_when(psych_med_status == "No" ~ 0,
+                              psych_med_status == "Yes" ~ 1,
+                              )) #recode psych_med_status variable to numeric
+
+```
+
+### Inspect motion variables from HALFpipe output
+
+```{r, motion}
+
+#load data
+
+motion_vars <-rio::import("/Volumes/hwhalley-adol-imaging/irritability")
+
+```
+
+
+
+Need to extract covariates of interest for use in further analyses
+
+```{r, generate covariate df for HALFpipe group analysis (dummy run)}
+
+covs <- demo_vars %>% 
+  select(studyID, sex, age, med_group)
+
+
+setwd("/Volumes/hwhalley-adol-imaging/irritability_project/data")
+saveRDS(covs,"demo_covs_LEiDA.rds")
+```

@@ -1,0 +1,52 @@
+---
+title: "prep_LEiDA_data"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '/Volumes/hwhalley-adol-imaging/irritability_project/LEIDA_Toolbox')
+
+library(tidyverse)
+```
+
+## Introduction
+
+The purpose of this script is to extract timeseries from HALFpipe output for use in LEiDA Toolbox
+
+For details on LEiDA analysis, please see: https://sites.google.com/view/psychomark/home
+
+We will use the Brainnetome Atlas output from HALFpipe. HALFpipe derivatives can be found here: "/Users/niamhmacsweeney/Documents/HALFpipe_irrit_reduced_features/derivatives/halfpipe"
+
+Time series file name structure for each participant: func/task-Rest/sub-sub%d_task-Rest_feature-corrMatrix_atlas-brainnetomeCombinedDseg_timeseries.tsv
+
+We have moved the timeseries files to a new directory using the command line:
+
+For reference, the code is:
+
+find . -type f -iname "*_task-Rest_feature-corrMatrix_atlas-brainnetomeCombinedDseg_timeseries.tsv" -exec cp {} /Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_timeseries_irrit_data/ \;
+
+All of the necessary files are in /Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_timeseries_irrit_data/
+
+for the LEiDA toolbox to work, we now need to rename files based on their condition, e.g., whether participant is depressed or not depressed.
+
+```{r, renaming files}
+
+#load in participant dataframe
+
+data <-rio::import("/Volumes/hwhalley-adol-imaging/irritability_project/data/LEiDA_data.csv")
+
+#get list of ids for each group
+#dep group 0 = not depressed; 1 = depressed 
+
+dep_ids <- data[data$dep_group == 1, ] 
+print(dep_ids$studyID)
+nondep_ids <- data[data$dep_group == 0, ] 
+print(nondep_ids$studyID)
+
+#change file names manually (not ideal but tried to get working in R and was taking too much time. May revisit later!)
+
+
+
+```
+
